@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>人工智能 · 陈徐</title>
+<meta name="description" content="人工智能概论课程学习笔记与实验记录：从 AI 工具的实际使用，到多层感知机的参数学习过程与可视化。">
+<link rel="stylesheet" href="css/site.css">
+</head>
+<body>
+
+<div class="top">
+  <div class="wrap">
+    <a class="logo" href="index.html"><span class="dot"></span>人工智能</a>
+    <nav class="nav">
+      <a href="index.html#notes">使用与见解</a>
+      <a href="index.html#mlp">MLP 过程呈现</a>
+      <a href="index.html#about">反思与总结</a>
+    </nav>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">AI · Notes &amp; Experiments</p>
+    <h1>人工智能</h1>
+    <p class="sub">课程学习笔记与实验记录：从工具使用到神经网络内部，把每一次实践都摊开看一眼。</p>
+    <div class="rule"></div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- 01 文章 -->
+  <section id="notes">
+    <div class="sec-head"><span class="no">01</span><h2>人工智能的使用与见解</h2></div>
+    <div class="posts">
+
+      <a class="post" href="posts/ai-agents.html">
+        <span class="date">2026-10-18</span>
+        <span class="mid">
+          <span class="t">agent的使用与见解</span>
+          <span class="d">从 WorkBuddy 到 Claude Code：两个 AI Agent 分别怎样改变了我的日常工作与大一的编程学习。</span>
+        </span>
+        <span class="arrow">→</span>
+      </a>
+
+    </div>
+  </section>
+
+  <!-- 02 作业 -->
+  <section id="mlp" style="padding-top:8px">
+    <div class="sec-head"><span class="no">02</span><h2>作业展示</h2></div>
+
+    <a class="feature" href="mlp.html">
+      <div class="body">
+        <span class="badge">第二篇 · 第 15 节</span>
+        <h3>MLP过程呈现<span class="zh">多层感知机的参数学习过程与可视化</span></h3>
+        <p>
+          以原神抽卡概率为案例：先建概率模型算出 1.605% 的综合概率，再用一个纯手写的 MLP
+          从抽样数据里反推概率曲线。页面把前向传播、损失、反向传播、参数更新拆成逐帧动画，
+          权重矩阵、隐藏单元响应与每一层的 z / a / δ 都能实时看见。
+        </p>
+        <div class="tags">
+          <span class="tag">前向 / 反向传播</span>
+          <span class="tag">Adam</span>
+          <span class="tag">参数可视化</span>
+          <span class="tag">动态过程动画</span>
+        </div>
+        <span class="cta">打开演示 →</span>
+      </div>
+      <div class="thumb">
+        <svg viewBox="0 0 260 190" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <g stroke="#2f5fd0" stroke-opacity=".28" stroke-width="1">
+            <path d="M28 95 L92 44"/><path d="M28 95 L92 78"/><path d="M28 95 L92 112"/><path d="M28 95 L92 146"/>
+            <path d="M92 44 L158 58"/><path d="M92 44 L158 96"/><path d="M92 44 L158 134"/>
+            <path d="M92 78 L158 58"/><path d="M92 78 L158 96"/><path d="M92 78 L158 134"/>
+            <path d="M92 112 L158 58"/><path d="M92 112 L158 96"/><path d="M92 112 L158 134"/>
+            <path d="M92 146 L158 58"/><path d="M92 146 L158 96"/><path d="M92 146 L158 134"/>
+            <path d="M158 58 L224 82"/><path d="M158 96 L224 82"/><path d="M158 134 L224 82"/>
+            <path d="M158 58 L224 118"/><path d="M158 96 L224 118"/><path d="M158 134 L224 118"/>
+          </g>
+          <g fill="#fffdf8" stroke="#2f5fd0" stroke-width="1.6">
+            <circle cx="28" cy="95" r="9"/>
+            <circle cx="92" cy="44" r="7"/><circle cx="92" cy="78" r="7"/><circle cx="92" cy="112" r="7"/><circle cx="92" cy="146" r="7"/>
+            <circle cx="158" cy="58" r="7"/><circle cx="158" cy="96" r="7"/><circle cx="158" cy="134" r="7"/>
+            <circle cx="224" cy="82" r="8"/><circle cx="224" cy="118" r="8"/>
+          </g>
+          <g fill="#2f5fd0"><circle cx="28" cy="95" r="3.4"/><circle cx="224" cy="82" r="3.4"/></g>
+          <g fill="#c0842a"><circle cx="224" cy="118" r="3.4"/></g>
+          <text x="130" y="178" font-size="9" fill="#8b8478" font-family="monospace" text-anchor="middle">1 → 16 → 16 → 2</text>
+        </svg>
+        <span class="cap">p̂(n) 随训练被改写</span>
+      </div>
+    </a>
+  </section>
+
+  <!-- 03 反思与总结 -->
+  <section id="about" style="padding-top:8px">
+    <div class="sec-head"><span class="no">03</span><h2>做人工智能概论两次作业的反思与总结</h2></div>
+
+    <div class="prose" style="max-width:44em">
+      <p>
+        首先，完成第一次作业时，我贪图省力与便捷，用凡科建站的免费版随便搭建了一个网站，把文案写了上传就完事了。
+        但是，这样做出来的作业的效果显然不是很好。
+      </p>
+
+      <p>
+        这一次作业，老师让我们展示 MLP 学习参数的实现与可视化。虽然我是人工智能专业的，
+        但目前大一阶段，我对人工智能的运行原理还是一知半解的，独立完成这个作业对我来说有比较大的挑战性。
+        于是，我使用 AI 工具 WorkBuddy 帮助我共同完成了此次作业：<strong>网站整体的排版、作业的主题，
+        以及内容的呈现形式由我负责，而 MLP 的过程呈现则由 WorkBuddy 负责。</strong>
+      </p>
+
+      <p>
+        在完成了网站的制作后，我也对其中的内容进行了检查与修改，对 MLP 的运行原理进行了追问。
+        虽然此次作业确实不是由我独立完成，但是借助 Agent 之手，我更加熟悉了网站的搭建流程，
+        也对 MLP 确实有了更加深入的了解。希望在未来的学习生活中，我也能在使用 Agent 的过程中实现自我提升。
+      </p>
+    </div>
+
+    <div class="about">
+      <div class="info"><h4>课程</h4><p>人工智能概论</p></div>
+      <div class="info"><h4>本次作业</h4><p>第二篇 · 第 15 节<br>MLP 学习参数的实现与可视化</p></div>
+      <div class="info"><h4>作者</h4><p>陈徐</p></div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 人工智能 · 陈徐</span>
+    <span><a href="posts/ai-agents.html">使用与见解</a>　·　<a href="mlp.html">MLP 演示</a></span>
+  </div>
+</footer>
+
+<script>
+/* 分享链接访问时，自动把 sharecode 附加到站内链接上，避免子页 403 */
+(function () {
+  var q = location.search;
+  if (!q || q.indexOf('sharecode') === -1) return;
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[href]');
+    if (!a) return;
+    var h = a.getAttribute('href');
+    if (!h || /^(https?:|mailto:|#)/.test(h)) return;
+    if (h.indexOf('sharecode') !== -1) return;
+    a.setAttribute('href', h + (h.indexOf('?') === -1 ? '?' : '&') + q.slice(1));
+  });
+})();
+</script>
+
+</body>
+</html>

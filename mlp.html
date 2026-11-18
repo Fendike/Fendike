@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 允许被别的站点用 iframe 嵌入；同时把本页高度报给父页面，方便自适应 -->
+<meta http-equiv="Content-Security-Policy" content="frame-ancestors *">
+<title>原神抽卡概率分析 · 从概率模型到 MLP 学习参数</title>
+<meta name="description" content="用概率模型、蒙特卡洛模拟与多层感知机（MLP）拆解原神角色池的抽卡机制，并可视化 MLP 的权重与偏置。">
+<link rel="stylesheet" href="css/style.css">
+<style>
+  /* 站点导航条（仅本页顶部） */
+  .sitenav{
+    background:#fbf9f4;border-bottom:1px solid #e6e0d4;
+    font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+  }
+  .sitenav .in{
+    max-width:1160px;margin:0 auto;padding:0 24px;height:48px;
+    display:flex;align-items:center;justify-content:space-between;gap:16px;
+    font-size:13.5px;
+  }
+  .sitenav a{text-decoration:none;color:#7d766b}
+  .sitenav a:hover{color:#1b1a17}
+  .sitenav .home{display:flex;align-items:center;gap:8px;font-weight:600;color:#1b1a17}
+  .sitenav .home i{width:8px;height:8px;border-radius:50%;background:#2f5fd0;display:block}
+  .sitenav .back{color:#2f5fd0}
+  .sitenav .back:hover{text-decoration:underline}
+  @media(max-width:640px){.sitenav .in{padding:0 16px;height:44px;font-size:12.5px}}
+</style>
+</head>
+<body>
+
+<div class="sitenav">
+  <div class="in">
+    <a class="home" href="index.html"><i></i>人工智能</a>
+    <a class="back" href="index.html#mlp">← 返回首页</a>
+  </div>
+</div>
+
+<script>
+/* 分享链接访问时，自动把 sharecode 附加到站内链接上，避免子页 403 */
+(function () {
+  var q = location.search;
+  if (!q || q.indexOf('sharecode') === -1) return;
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[href]');
+    if (!a) return;
+    var h = a.getAttribute('href');
+    if (!h || /^(https?:|mailto:|#)/.test(h)) return;
+    if (h.indexOf('sharecode') !== -1) return;
+    a.setAttribute('href', h + (h.indexOf('?') === -1 ? '?' : '&') + q.slice(1));
+  });
+})();
+</script>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <span class="brand">GACHA&nbsp;/&nbsp;LAB</span>
+    <nav>
+      <a href="#mechanism">机制</a>
+      <a href="#montecarlo">模拟</a>
+      <a href="#cost">成本</a>
+      <a href="#mlp">MLP 实验</a>
+      <a href="#toy">参数几何</a>
+      <a href="#experiments">对照实验</a>
+      <a href="#conclusion">结论</a>
+    </nav>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="hero-inner">
+    <div class="hero-text">
+      <p class="eyebrow">人工智能概论 · 第二篇 · 第 15 节　MLP 学习参数的实现与可视化</p>
+      <h1>原神抽卡概率分析</h1>
+      <p class="sub">从解析概率到多层感知机：把「欧非」算清楚，再把神经网络的参数摊开看</p>
+      <p class="lede">
+        抽卡大概是概率论最贵的应用场景。本页用三样东西拆解它：一个可解析的概率模型、十万次蒙特卡洛模拟，
+        以及一个 <b>从抽卡记录里反推概率曲线</b>的小型 MLP。
+        最后把 MLP 的全部可学习参数——权重矩阵 <i>W</i> 与偏置 <i>b</i>——摊开，
+        看它们究竟把「保底」学成了什么。
+      </p>
+      <dl class="meta">
+        <div><dt>课程</dt><dd>人工智能概论</dd></div>
+        <div><dt>实验</dt><dd>第 15 节 · MLP 学习参数的实现与可视化</dd></div>
+        <div><dt>主题</dt><dd>原神角色池抽卡概率</dd></div>
+        <div><dt>作者</dt><dd>陈徐</dd></div>
+      </dl>
+    </div>
+    <div class="hero-card">
+      <div class="kpi-row">
+        <div class="kpi"><span class="num">62.30</span><span class="unit">抽</span><span class="lab">出一张五星的期望</span></div>
+        <div class="kpi"><span class="num">1.605<span class="pct">%</span></span><span class="lab">含保底的综合概率（官方 1.6%）</span></div>
+        <div class="kpi"><span class="num">93.5</span><span class="unit">抽</span><span class="lab">拿到当期 UP 的期望</span></div>
+        <div class="kpi"><span class="num">35.6<span class="pct">%</span></span><span class="lab">74 抽之内就出货的概率</span></div>
+      </div>
+      <canvas id="heroCurve" class="hero-canvas" height="150"></canvas>
+      <p class="cap">单抽五星概率 p(n) 随垫抽数 n 的变化 —— 前 73 抽几乎贴着零，74 抽起陡然抬升。</p>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<!-- ================= 01 机制 ================= -->
+<section id="mechanism" class="sec">
+  <div class="sec-head">
+    <span class="no">01</span>
+    <h2>机制：0.6% 背后的三段式</h2>
+  </div>
+
+  <div class="two-col">
+    <div class="col-text">
+      <p>
+        角色池的五星基础概率是 <b>0.6%</b>，第 <b>90</b> 抽必定出金（硬保底）。但真正决定体验的不是这两个数字，
+        而是中间那段官方从未写进说明的「软保底」：从第 <b>74</b> 抽开始，单抽概率逐级抬升。
+      </p>
+      <p>
+        官方只公示了「含保底综合概率 1.6%」。本页采用社区拟合最广的模型——
+        <b>74 抽起每抽 +6 个百分点</b>，第 90 抽强制 100%。用这个模型算出的综合概率是
+        <b>1.605%</b>，与公示值几乎重合，可以认为它抓住了机制的骨架。
+      </p>
+      <table class="mini-table" id="p5Table">
+        <thead><tr><th>垫抽数 n</th><th>73</th><th>74</th><th>80</th><th>85</th><th>89</th><th>90</th></tr></thead>
+        <tbody><tr><th>单抽概率 p(n)</th><td>0.6%</td><td>6.6%</td><td>42.6%</td><td>72.6%</td><td>96.6%</td><td>100%</td></tr></tbody>
+      </table>
+      <p class="note">
+        注意 74 抽前后：概率从 0.6% 直接跳到 6.6%，是原来的 11 倍。所以「垫抽」确实有用，
+        但作用方式不是玄学，而是一条分段函数。
+      </p>
+    </div>
+
+    <figure class="col-fig">
+      <canvas id="curveP5" height="300"></canvas>
+      <div class="fig-tools">
+        <label class="chk"><input type="checkbox" id="tgSoft" checked> 软保底（74 抽起递增）</label>
+        <label class="chk"><input type="checkbox" id="tgHard" checked> 硬保底（90 抽必出）</label>
+      </div>
+      <div class="readout" id="curveReadout"></div>
+      <figcaption>图 1　把两个开关关掉，就能看到「纯 0.6%」是什么样子：曲线会变成一条贴着底部的直线（或一条到 90 抽才起跳的台阶），期望抽数从 62 抽一路涨到 166 抽。</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ================= 02 蒙特卡洛 ================= -->
+<section id="montecarlo" class="sec">
+  <div class="sec-head">
+    <span class="no">02</span>
+    <h2>蒙特卡洛：出金的抽数是怎么分布的</h2>
+  </div>
+
+  <p class="lead-p">
+    解析模型能给期望，但玩家真正关心的是「我这 80 抽够不够」。这类问题需要分布和分位数。
+    下面用最朴素的方法模拟：每抽一次，按当前垫抽数取一次伯努利试验，出金就清零。
+    模拟结果与解析分布并排画出来，顺便验证模型自洽。
+  </p>
+
+  <div class="lab">
+    <aside class="lab-ctrl">
+      <h3>模拟设置</h3>
+      <label class="field">模拟次数
+        <select id="simN">
+          <option value="2000">2,000 次</option>
+          <option value="20000" selected>20,000 次</option>
+          <option value="200000">200,000 次</option>
+        </select>
+      </label>
+      <label class="field">对照
+        <select id="simMode">
+          <option value="pity" selected>完整机制（软 + 硬保底）</option>
+          <option value="nopity">假设没有保底</option>
+        </select>
+      </label>
+      <button class="btn" id="btnSim">重新模拟</button>
+      <div class="hint">
+        模拟用的是「抽到出金为止」的单次运行，重复 N 次得到 N 个出货抽数样本。
+      </div>
+    </aside>
+
+    <div class="lab-main">
+      <div class="chart-block">
+        <h4>出货抽数分布</h4>
+        <canvas id="histChart" height="260"></canvas>
+        <div class="legend">
+          <span><i class="sw blue"></i>模拟频率</span>
+          <span><i class="sw line"></i>解析分布 p(n)</span>
+        </div>
+      </div>
+      <div class="chart-block">
+        <h4>累积分布（抽到第 n 抽时已出货的比例）</h4>
+        <canvas id="cdfChart" height="220"></canvas>
+      </div>
+    </div>
+
+    <aside class="lab-side">
+      <h3>统计量</h3>
+      <table class="stat-table" id="simStats">
+        <thead><tr><th></th><th>模拟</th><th>理论</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="verdict" id="simVerdict"></div>
+    </aside>
+  </div>
+</section>
+
+<!-- ================= 03 成本 ================= -->
+<section id="cost" class="sec">
+  <div class="sec-head">
+    <span class="no">03</span>
+    <h2>账本：一个 UP 角色值多少钱</h2>
+  </div>
+
+  <div class="two-col">
+    <div class="col-text">
+      <p>
+        限定角色还有一层「大保底」：出金时 <b>50%</b> 是当期 UP，否则「歪」到常驻，下一次出金必定 UP。
+        这意味着要拿到指定角色，平均要付出 <b>1.5 张五星</b>的代价：62.30 × 1.5 ≈ <b>93.5 抽</b>。
+      </p>
+      <p>
+        换算成钱：每抽 160 原石，非首充 648 元 = 8080 原石，即 <b>0.0802 元/原石</b>。
+        于是单抽约 12.8 元。把上面的抽数乘上去，就得到右表。
+      </p>
+      <p class="note">
+        这张表最容易被误读：期望不是「应该花这么多」，而是「重复很多次后的平均值」。
+        分布是双峰的（见图 2）——大约一半人 62 抽左右就拿到，另一半要吃到 124 抽上下。
+      </p>
+    </div>
+
+    <div class="col-fig">
+      <canvas id="upHist" height="240"></canvas>
+      <figcaption>图 2　抽到当期 UP 所需抽数的分布（40,000 次模拟）。两个峰分别对应「小保底就中」和「歪了再吃大保底」。</figcaption>
+    </div>
+  </div>
+
+  <table class="data-table">
+    <thead>
+      <tr><th>目标</th><th>抽数</th><th>原石</th><th>人民币（非首充）</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1 个五星（不含 UP 保证）</td><td class="num">62.3</td><td class="num">9,968</td><td class="num">¥ 799</td><td>任意五星，含常驻</td></tr>
+      <tr><td>1 个指定 UP 角色</td><td class="num">93.5</td><td class="num">14,956</td><td class="num">¥ 1,199</td><td>计入 50/50 与大保底</td></tr>
+      <tr><td>满命（7 只，最坏情况全吃大保底）</td><td class="num">654.5</td><td class="num">104,691</td><td class="num">¥ 8,396</td><td>期望口径，不考虑首充</td></tr>
+      <tr><td>单次最坏情况（90 抽歪 + 90 抽保底）</td><td class="num">180</td><td class="num">28,800</td><td class="num">¥ 2,310</td><td>概率约 2%，但确实存在</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ================= 04 MLP ================= -->
+<section id="mlp" class="sec">
+  <div class="sec-head">
+    <span class="no">04</span>
+    <h2>第 15 节实验：让 MLP 从抽卡数据里学出概率曲线</h2>
+    <span class="tag">本页核心</span>
+  </div>
+
+  <div class="task-box">
+    <h3>实验任务</h3>
+    <p>
+      假设我们是完全的外人：不知道 0.6%，也不知道 74 抽会转折，手里只有一份抽卡记录。
+      能否训练一个多层感知机，让它自己把 <b>p(n)</b> 这条曲线学出来——然后我们再从它的参数里读出「保底」？
+    </p>
+    <ol>
+      <li><b>数据构造</b>：按垫抽数分层，对 n = 1…90 每个取值独立模拟 6000 次抽卡，得到经验出货率 f(n)。
+        这样每个 n 都有足够的样本，避免真实流水里高抽数区间样本稀疏的问题。</li>
+      <li><b>标签</b>：把 f(n) 当作软标签（soft label），用交叉熵 <i>L</i> = −Σ<i>t<sub>k</sub></i> log <i>p<sub>k</sub></i> 训练。
+        交叉熵的最优解就是真实条件概率，所以网络输出可以被当作概率解读。</li>
+      <li><b>模型</b>：输入 <i>x</i> = n/90（1 维），两层隐藏层，输出 2 类 softmax，输出层第 2 个分量即 p̂(n)。</li>
+      <li><b>要观察的参数</b>：每个权重 <i>w</i> 与偏置 <i>b</i> 都在做什么？它们如何把一条台阶「拼」出来？</li>
+    </ol>
+  </div>
+
+  <div class="lab lab-mlp">
+    <aside class="lab-ctrl">
+      <h3>模型结构</h3>
+      <label class="field">隐藏层
+        <select id="cfgHidden">
+          <option value="">无（线性）</option>
+          <option value="8">1 层 × 8</option>
+          <option value="16">1 层 × 16</option>
+          <option value="16,16" selected>2 层 × 16</option>
+          <option value="32,32">2 层 × 32</option>
+        </select>
+      </label>
+      <label class="field">激活函数
+        <select id="cfgAct">
+          <option value="tanh" selected>tanh</option>
+          <option value="relu">ReLU</option>
+          <option value="sigmoid">Sigmoid</option>
+        </select>
+      </label>
+      <label class="field">初始化
+        <select id="cfgInit">
+          <option value="xavier" selected>Xavier</option>
+          <option value="he">He</option>
+          <option value="zero">全零（会失败）</option>
+        </select>
+      </label>
+      <label class="field">优化器
+        <select id="cfgOpt">
+          <option value="adam" selected>Adam</option>
+          <option value="momentum">Momentum</option>
+          <option value="sgd">SGD</option>
+        </select>
+      </label>
+      <label class="field">学习率 <output id="outLR">0.050</output>
+        <input type="range" id="cfgLR" min="-3" max="0" step="0.02" value="-1.3">
+      </label>
+      <label class="field">每层试验次数
+        <select id="cfgTrials">
+          <option value="200">200（噪声大）</option>
+          <option value="1000">1,000</option>
+          <option value="6000" selected>6,000</option>
+        </select>
+      </label>
+      <div class="btn-row">
+        <button class="btn primary" id="btnTrain">开始训练</button>
+        <button class="btn" id="btnReset">重置</button>
+      </div>
+      <div class="progress"><div class="bar" id="trainBar"></div></div>
+      <div class="hint" id="trainHint">训练 600 个 epoch，约 0.2 秒可跑完；这里放慢成动画，方便观察曲线如何被「掰」到位。</div>
+    </aside>
+
+    <div class="lab-main">
+      <div class="chart-block">
+        <h4>拟合结果：模型给出的 p̂(n)</h4>
+        <canvas id="fitChart" height="300"></canvas>
+        <div class="legend">
+          <span><i class="sw dot"></i>经验频率 f(n)（训练数据）</span>
+          <span><i class="sw blue"></i>模型输出 p̂(n)</span>
+          <span><i class="sw dash"></i>真实模型 p(n)</span>
+        </div>
+      </div>
+      <div class="chart-block">
+        <h4>训练损失（交叉熵）</h4>
+        <canvas id="lossChart" height="170"></canvas>
+      </div>
+    </div>
+
+    <aside class="lab-side">
+      <h3>指标</h3>
+      <div class="metric"><span>epoch</span><b id="mEpoch">0</b></div>
+      <div class="metric"><span>交叉熵</span><b id="mLoss">—</b></div>
+      <div class="metric"><span>平均绝对误差</span><b id="mMAE">—</b></div>
+      <div class="metric"><span>反推期望抽数</span><b id="mExpect">—</b></div>
+      <div class="metric"><span>参数量</span><b id="mParams">—</b></div>
+      <div class="note small">
+        「反推期望抽数」是把学到的 p̂(n) 代回 <i>E</i> = Σ n·p̂(n)·Π(1−p̂(k))，看参数是否复原了机制层面的结论。
+        理论值 62.30 抽。
+      </div>
+    </aside>
+  </div>
+
+  <h3 class="sub-h">4.2　参数长什么样</h3>
+  <p class="lead-p">
+    下面是这台小机器全部的可学习参数。它们是 16×16 的权重矩阵、两条偏置向量，
+    以及输出层的 2×16 权重。颜色按符号区分：<span class="ink-blue">蓝为负</span>，<span class="ink-gold">金为正</span>。
+  </p>
+
+  <div class="param-grid">
+    <figure class="panel">
+      <h4>权重矩阵热图 <span class="mono" id="heatTitle">W⁽²⁾ 16×16</span></h4>
+      <canvas id="heatW" height="240"></canvas>
+      <div class="fig-tools">
+        <label class="field inline">查看层
+          <select id="heatLayer"></select>
+        </label>
+        <span class="mono small" id="heatScale"></span>
+      </div>
+      <figcaption>每一格是一个权重。可以拖动「查看层」，看 W⁽¹⁾（1×16）、W⁽²⁾（16×16）到输出层的变化。</figcaption>
+    </figure>
+
+    <figure class="panel">
+      <h4>隐藏单元在做什么 <span class="mono small">φ<sub>j</sub>(n) 随抽数的响应</span></h4>
+      <canvas id="respGrid" height="210"></canvas>
+      <figcaption>每格是一个隐藏单元。虚线是 74 抽的位置——真正「有用」的单元，转折都集中在这条线附近。</figcaption>
+    </figure>
+
+    <figure class="panel">
+      <h4>单元参数明细</h4>
+      <label class="field inline">选择单元
+        <select id="unitSel"></select>
+      </label>
+      <canvas id="unitBars" height="150"></canvas>
+      <div class="mono small" id="unitInfo"></div>
+      <figcaption>条形是该单元接收的权重 <i>w</i>（蓝负金正），黑点是偏置 <i>b</i>。偏置决定这个单元的「开关位置」，权重决定陡不陡。</figcaption>
+    </figure>
+
+    <figure class="panel">
+      <h4>网络结构与激活强度</h4>
+      <canvas id="netGraph" height="230"></canvas>
+      <figcaption>边的颜色=权重符号，粗细=|w|；节点深浅=该层在全部抽数上的平均激活。</figcaption>
+    </figure>
+  </div>
+
+  <h3 class="sub-h">4.3　动态过程：一次迭代里参数是怎么被改写的</h3>
+  <p class="lead-p">
+    上面那些热图是训练结束后的<b>遗照</b>。参数真正的意义在过程里：一次迭代只喂一个样本，
+    前向算出 <i>p̂</i>(<i>n</i>)，损失衡量它离标签有多远，反向把这点误差分摊给每个权重，
+    最后更新参数——四个阶段循环 90 次就是一轮。下面把速度放慢到肉眼可见，
+    每一步的中间量都写在画面上。
+  </p>
+
+  <div class="lab lab-dyn">
+    <aside class="lab-ctrl">
+      <h3>播放控制</h3>
+      <div class="btn-row">
+        <button class="btn primary" id="btnDyn">播放</button>
+        <button class="btn" id="btnDynStep">单步</button>
+      </div>
+      <div class="btn-row"><button class="btn" id="btnDynReset">重新开始</button></div>
+      <label class="field">速度
+        <select id="dynSpeed">
+          <option value="0.35">0.35×　很慢，逐个数字看</option>
+          <option value="0.6" selected>0.6×　慢速（默认）</option>
+          <option value="1.2">1.2×　每步约 1 秒</option>
+          <option value="2.5">2.5×　大约 10 秒一轮</option>
+        </select>
+      </label>
+      <label class="field">学习率 η
+        <select id="dynLR">
+          <option value="0.005">0.005　学得慢</option>
+          <option value="0.02" selected>0.02　正常</option>
+          <option value="0.05">0.05　太大，乱跳</option>
+        </select>
+      </label>
+      <div class="progress"><div class="bar" id="dynBar"></div></div>
+      <div class="hint">
+        结构固定 1-16-16-2，tanh，Adam，<b>逐样本</b>更新（每轮打乱一次顺序）。
+        默认 0.6× 慢速：一次迭代约 4 秒，一轮 90 次迭代约 6 分钟；想快点看趋势就调到 2.5×。
+        把 η 调到 0.05 能现场看到步长太大时曲线被甩成一条平线。
+      </div>
+    </aside>
+
+    <div class="lab-main">
+      <div class="chart-block">
+        <div class="phase-track" id="phaseTrack">
+          <span class="phase-chip" data-k="forward">① 前向</span>
+          <span class="phase-chip" data-k="loss">② 损失</span>
+          <span class="phase-chip" data-k="backward">③ 反向</span>
+          <span class="phase-chip" data-k="update">④ 更新</span>
+        </div>
+        <canvas id="dynNet" height="400"></canvas>
+        <div class="legend">
+          <span><i class="sw line blue"></i>正权重 / 前向信号</span>
+          <span><i class="sw line gold"></i>负权重</span>
+          <span><i class="sw line red"></i>反向误差 δ</span>
+          <span><i class="sw line green"></i>参数变化 Δw</span>
+        </div>
+      </div>
+      <div class="chart-block">
+        <h4>p̂(n) 被一次次改写 <span class="mono" id="dynFitTag">更新 0 次</span></h4>
+        <canvas id="dynFit" height="190"></canvas>
+      </div>
+    </div>
+
+    <aside class="lab-side">
+      <h3>这一次迭代</h3>
+      <div class="metric"><span>样本 n</span><b id="dynN">—</b></div>
+      <div class="metric"><span>输入 x = n/90</span><b id="dynX">—</b></div>
+      <div class="metric"><span>输出 p̂(n)</span><b id="dynP">—</b></div>
+      <div class="metric"><span>标签 t(n)</span><b id="dynT">—</b></div>
+      <div class="metric"><span>损失 L</span><b id="dynLoss">—</b></div>
+      <div class="metric"><span>‖δ‖ 各层</span><b id="dynDelta">—</b></div>
+      <div class="metric"><span>max|Δw|</span><b id="dynDw">—</b></div>
+      <div class="note small" id="dynNote">
+        按「单步」可以停在任一阶段。前三阶段参数还没动，只有第四阶段那一下才真的改。
+      </div>
+    </aside>
+  </div>
+
+  <div class="trace">
+    <div class="trace-head">
+      <span>这一次迭代的数值账本</span>
+      <span class="mono small" id="traceTag">—</span>
+    </div>
+    <div id="traceTable" class="trace-table"></div>
+  </div>
+
+  <h3 class="sub-h">4.4　从参数里读出的四件事</h3>
+  <div class="findings">
+    <div class="finding">
+      <span class="fno">1</span>
+      <div>
+        <h4>折点被学在了 74 抽附近</h4>
+        <p>偏置 <i>b</i> 决定单元的开关位置，权重 <i>w</i> 决定切换的陡峭程度。训练结束后，
+        那些 |<i>w</i>| 最大的单元，其 b/w 之比几乎都落在 x ≈ 74/90 处——
+        网络没有人告诉它「74 抽」，它从数据里把这条边界找了出来。</p>
+      </div>
+    </div>
+    <div class="finding">
+      <span class="fno">2</span>
+      <div>
+        <h4>拐点被抹圆，这是模型的先天限制</h4>
+        <p>tanh 是光滑函数，有限个光滑函数的组合无法表示真正的跳跃。
+        所以 73→74 的那一跳被摊平到 72~76 抽之间，这正是平均绝对误差（约 0.7 个百分点）的主要来源。
+        换成 ReLU 也不能完全解决——除非把每一抽当成独立输入。</p>
+      </div>
+    </div>
+    <div class="finding">
+      <span class="fno">3</span>
+      <div>
+        <h4>参数复现了机制层面的结论</h4>
+        <p>把学到的 p̂(n) 代回期望公式，得到 <b>62.57 抽</b>，与理论 62.30 抽相差 0.3 抽（0.4%）。
+        参数不只拟合了曲线，还复原了「出一张金要多少抽」这个整体结论——这才是模型可用的证据。</p>
+      </div>
+    </div>
+    <div class="finding">
+      <span class="fno">4</span>
+      <div>
+        <h4>参数不是同等重要的</h4>
+        <p>低抽数区间（n &lt; 70）几乎所有单元都处于饱和状态，输出恒为常数；
+        真正承担拟合任务的只有少数几个在 74 附近转折的单元。
+        网络用「绝大多数参数沉默、少数参数工作」的方式，表达了一条分段函数。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 05 二维几何 ================= -->
+<section id="toy" class="sec">
+  <div class="sec-head">
+    <span class="no">05</span>
+    <h2>补充：参数在二维输入空间里如何「切分」</h2>
+  </div>
+
+  <p class="lead-p">
+    抽卡任务只有 1 维输入，参数只能「挪动折点」，看不到「切分」。所以再补一个经典玩具实验：
+    输入是平面上的点，输出是类别。这时每个隐藏单元都是一条直线（<i>w</i>·<i>x</i> + <i>b</i> = 0），
+    网络用若干条直线围出决策区域——权重矩阵的几何含义一目了然。
+  </p>
+
+  <div class="lab">
+    <aside class="lab-ctrl">
+      <h3>玩具实验</h3>
+      <label class="field">数据集
+        <select id="toyData">
+          <option value="xor" selected>异或 XOR（线性不可分）</option>
+          <option value="moons">双月</option>
+          <option value="circles">同心圆</option>
+        </select>
+      </label>
+      <label class="field">噪声 <output id="toyNoiseOut">0.10</output>
+        <input type="range" id="toyNoise" min="0" max="0.6" step="0.02" value="0.1">
+      </label>
+      <div class="btn-row">
+        <button class="btn primary" id="btnToy">开始训练</button>
+        <button class="btn" id="btnToyReset">重置</button>
+      </div>
+      <div class="progress"><div class="bar" id="toyBar"></div></div>
+      <div class="hint">结构固定为 2-8-8-2，tanh，Momentum，学习率 0.1。</div>
+    </aside>
+
+    <div class="lab-main">
+      <div class="chart-block">
+        <h4>决策边界（背景色 = 模型认为的类别，边界处置信度低所以颜色最淡）</h4>
+        <canvas id="toyBoundary" class="square" height="380"></canvas>
+        <div class="legend">
+          <span><i class="sw dot blue"></i>类别 A</span>
+          <span><i class="sw dot gold"></i>类别 B</span>
+          <span class="mono" id="toyStat">epoch 0 · loss — · acc —</span>
+        </div>
+      </div>
+    </div>
+
+    <aside class="lab-side">
+      <h3>各层权重热图</h3>
+      <div class="heat-stack">
+        <div><span class="mono small">W⁽¹⁾ 8×2</span><canvas id="toyW1" height="90"></canvas></div>
+        <div><span class="mono small">W⁽²⁾ 8×8</span><canvas id="toyW2" height="110"></canvas></div>
+        <div><span class="mono small">W⁽³⁾ 2×8</span><canvas id="toyW3" height="60"></canvas></div>
+      </div>
+      <div class="note small">XOR 至少要 3 条直线才能围出一个区域，所以看到 W⁽²⁾ 里只有少数几行权重显著。</div>
+    </aside>
+  </div>
+</section>
+
+<!-- ================= 06 对照实验 ================= -->
+<section id="experiments" class="sec">
+  <div class="sec-head">
+    <span class="no">06</span>
+    <h2>对照实验：哪些超参数真的重要</h2>
+  </div>
+
+  <p class="lead-p">
+    全部实验使用同一份实现（<span class="mono">js/mlp.js</span>），跑 3 个随机种子取平均。
+    评价指标：交叉熵、对经验频率的平均绝对误差（MAE，单位百分点），以及由学到的曲线反推的期望抽数（理论 62.30）。
+    复现命令 <span class="mono">node code/experiments.js</span>。
+  </p>
+
+  <div class="tables">
+    <div class="table-card">
+      <h4>A　激活函数</h4>
+      <p class="tc-sub">2-16-16，Adam，η=0.05，600 epoch</p>
+      <table class="data-table compact">
+        <thead><tr><th>配置</th><th>交叉熵</th><th>MAE</th><th>反推期望</th></tr></thead>
+        <tbody>
+          <tr><td>tanh</td><td class="num">0.1237</td><td class="num">0.74 pp</td><td class="num">62.57</td></tr>
+          <tr><td>ReLU</td><td class="num">0.1245</td><td class="num">0.89 pp</td><td class="num">62.70</td></tr>
+          <tr><td>Sigmoid</td><td class="num">0.1246</td><td class="num">0.90 pp</td><td class="num">62.57</td></tr>
+        </tbody>
+      </table>
+      <p class="tc-note">差距不大：一维光滑曲线对激活函数不敏感。tanh 略优，因为它的输出有界、梯度在 0 附近最强。</p>
+    </div>
+
+    <div class="table-card">
+      <h4>B　网络结构</h4>
+      <p class="tc-sub">tanh，Adam，η=0.05，600 epoch</p>
+      <table class="data-table compact">
+        <thead><tr><th>配置</th><th>交叉熵</th><th>MAE</th><th>反推期望</th></tr></thead>
+        <tbody>
+          <tr><td>无隐藏层（线性）</td><td class="num">0.1534</td><td class="num">3.50 pp</td><td class="num">67.71</td></tr>
+          <tr><td>1-8</td><td class="num">0.1264</td><td class="num">1.33 pp</td><td class="num">63.04</td></tr>
+          <tr><td>1-16</td><td class="num">0.1262</td><td class="num">1.26 pp</td><td class="num">63.07</td></tr>
+          <tr><td>1-16-16</td><td class="num">0.1237</td><td class="num">0.74 pp</td><td class="num">62.57</td></tr>
+          <tr><td>1-32-32</td><td class="num">0.1230</td><td class="num">0.43 pp</td><td class="num">62.92</td></tr>
+        </tbody>
+      </table>
+      <p class="tc-note">线性模型最差：它只能输出常数或单调函数，学不出「先平后陡」的台阶，期望被高估 5.4 抽。
+      加一层隐藏层立刻救回来，说明非线性不是可选项。</p>
+    </div>
+
+    <div class="table-card">
+      <h4>C　学习率</h4>
+      <p class="tc-sub">1-16-16，tanh，Adam，600 epoch</p>
+      <table class="data-table compact">
+        <thead><tr><th>学习率</th><th>交叉熵</th><th>MAE</th><th>反推期望</th></tr></thead>
+        <tbody>
+          <tr><td>0.005</td><td class="num">0.1253</td><td class="num">1.05 pp</td><td class="num">61.90</td></tr>
+          <tr><td>0.02</td><td class="num">0.1241</td><td class="num">0.76 pp</td><td class="num">61.34</td></tr>
+          <tr class="hl"><td>0.05</td><td class="num">0.1237</td><td class="num">0.74 pp</td><td class="num">62.57</td></tr>
+          <tr><td>0.10</td><td class="num">0.1228</td><td class="num">0.45 pp</td><td class="num">61.77</td></tr>
+          <tr class="bad"><td>0.30</td><td class="num">0.3615</td><td class="num">14.98 pp</td><td class="num">14.66</td></tr>
+        </tbody>
+      </table>
+      <p class="tc-note">η=0.3 时 Adam 直接发散：损失停在 0.36，曲线被压成常数，反推期望只剩 14.66 抽。
+      这是「学习率过大」最典型的现场。</p>
+    </div>
+
+    <div class="table-card">
+      <h4>D　优化器</h4>
+      <p class="tc-sub">1-16-16，tanh，600 epoch</p>
+      <table class="data-table compact">
+        <thead><tr><th>配置</th><th>交叉熵</th><th>MAE</th><th>反推期望</th></tr></thead>
+        <tbody>
+          <tr><td>SGD，η=0.05</td><td class="num">0.1389</td><td class="num">1.87 pp</td><td class="num">71.82</td></tr>
+          <tr><td>SGD，η=0.5</td><td class="num">0.1267</td><td class="num">1.28 pp</td><td class="num">62.99</td></tr>
+          <tr><td>Momentum，η=0.05</td><td class="num">0.1254</td><td class="num">1.08 pp</td><td class="num">63.23</td></tr>
+          <tr class="hl"><td>Adam，η=0.05</td><td class="num">0.1237</td><td class="num">0.74 pp</td><td class="num">62.57</td></tr>
+        </tbody>
+      </table>
+      <p class="tc-note">Adam 用同样的步数收敛得最好。SGD 需要把学习率放大 10 倍才勉强追上，说明自适应步长确实省掉了调参。</p>
+    </div>
+
+    <div class="table-card">
+      <h4>E　初始化</h4>
+      <p class="tc-sub">1-16-16，tanh，Adam，η=0.05，600 epoch</p>
+      <table class="data-table compact">
+        <thead><tr><th>初始化</th><th>交叉熵</th><th>MAE</th><th>反推期望</th></tr></thead>
+        <tbody>
+          <tr><td>Xavier</td><td class="num">0.1237</td><td class="num">0.74 pp</td><td class="num">62.57</td></tr>
+          <tr><td>He</td><td class="num">0.1229</td><td class="num">0.51 pp</td><td class="num">62.28</td></tr>
+          <tr class="bad"><td>全零</td><td class="num">0.3415</td><td class="num">16.51 pp</td><td class="num">9.38</td></tr>
+        </tbody>
+      </table>
+      <p class="tc-note">全零初始化彻底失败：同一层的单元梯度完全相同，永远保持同步，
+      16 个单元退化成 1 个。这就是「对称性破缺」为什么必须靠随机初始化完成。</p>
+    </div>
+
+    <div class="table-card">
+      <h4>F　数据量</h4>
+      <p class="tc-sub">每层试验次数，1-16-16，tanh，Adam，η=0.05</p>
+      <table class="data-table compact">
+        <thead><tr><th>每层样本</th><th>交叉熵</th><th>MAE</th><th>反推期望</th></tr></thead>
+        <tbody>
+          <tr><td>200</td><td class="num">0.1281</td><td class="num">1.58 pp</td><td class="num">63.42</td></tr>
+          <tr><td>1,000</td><td class="num">0.1249</td><td class="num">1.07 pp</td><td class="num">63.43</td></tr>
+          <tr class="hl"><td>6,000</td><td class="num">0.1237</td><td class="num">0.74 pp</td><td class="num">62.57</td></tr>
+        </tbody>
+      </table>
+      <p class="tc-note">样本从 200 增到 6000，MAE 减半。低抽数区间的真实概率只有 0.6%，样本少时
+      经验频率的噪声比信号还大，网络学到的是噪声。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 07 结论 ================= -->
+<section id="conclusion" class="sec">
+  <div class="sec-head">
+    <span class="no">07</span>
+    <h2>结论与局限</h2>
+  </div>
+
+  <div class="concl-grid">
+    <div class="concl">
+      <h3>关于抽卡</h3>
+      <ul>
+        <li>出货抽数是<b>高度集中</b>的：一半人 76 抽内出金，90% 的人 80 抽内出金，99% 在 83 抽内。这是软保底的功劳。</li>
+        <li>如果没有保底，期望会从 62.3 抽涨到 <b>166.7 抽</b>，而且 58.2% 的人在 90 抽内根本出不了金。保底是这套系统里最重要的设计。</li>
+        <li>「垫抽有用」是真的，但它是<b>分段函数</b>：73 抽之前垫抽只改变了你离保底还有多远，不会提高单抽概率。</li>
+        <li>一个 UP 角色的期望成本约 93.5 抽（¥1,200），但分布双峰，<b>不能用平均值做预算</b>——留 160 抽才算稳。</li>
+      </ul>
+    </div>
+    <div class="concl">
+      <h3>关于 MLP 的学习参数</h3>
+      <ul>
+        <li>权重决定「怎么变」，偏置决定「在哪变」。一条台阶曲线被 16 个单元摊开，每个单元负责一小段。</li>
+        <li>光滑激活函数无法表达跳变，拐点必然被抹圆；模型误差的主要来源不是优化没做好，而是<b>函数类的表达能力</b>。</li>
+        <li>参数可以反推统计结论（62.57 vs 62.30），说明网络学到的是机制而非噪声。</li>
+        <li>初始化与学习率决定「能不能学」，结构与数据量决定「能学多准」。全零初始化、η=0.3 这两个坑，本项目都现场复现了一次。</li>
+      </ul>
+    </div>
+    <div class="concl limit">
+      <h3>局限</h3>
+      <ul>
+        <li>软保底的递增率官方未公布，+6%/抽 是社区拟合，不同来源在 72~74 抽的起点上存在分歧；结论对起点敏感，对整体结论不敏感。</li>
+        <li>只建模了角色池五星，未涉及四星保底、武器池（保底 80 抽、定轨机制）与混池。</li>
+        <li>数据是自己按模型生成的，不是真实账号日志；因此实验验证的是「能否从数据反推机制」，不是「机制是否正确」。</li>
+        <li>50/50 与大保底的独立性按官方规则处理，未考虑跨池共享保底等细节。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="foot-inner">
+    <p>人工智能概论 · 第二篇 第 15 节　MLP 学习参数的实现与可视化</p>
+    <p class="mono">概率模型 + 蒙特卡洛 + 纯手写 MLP　·　所有数字均可用 code/experiments.js 复现</p>
+    <p class="disclaimer">本页为课程作业，数据由公开资料与模拟生成，与米哈游官方无关；抽卡有风险，理性消费。</p>
+  </div>
+</footer>
+
+<script src="js/mlp.js"></script>
+<script src="js/gacha.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/dyn.js"></script>
+<script src="js/app.js"></script>
+<script>
+/* 被 iframe 嵌入时：把真实高度报给父页面，父页面可据此自适应。
+   父页面监听 message 事件，data.type === 'wb-resize' 时设置 iframe 高度即可。 */
+(function () {
+  if (window.parent === window) return;
+  var last = 0;
+  function report() {
+    var h = Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0
+    );
+    if (Math.abs(h - last) < 8) return;
+    last = h;
+    try { window.parent.postMessage({ type: 'wb-resize', height: h }, '*'); } catch (e) {}
+  }
+  window.addEventListener('load', report);
+  window.addEventListener('resize', report);
+  setInterval(report, 800);
+})();
+</script>
+</body>
+</html>
